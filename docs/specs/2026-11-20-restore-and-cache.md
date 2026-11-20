@@ -226,7 +226,7 @@ Rules:
   repeats), so a slow old answer never beats a later one.
 - **Caps, so a file is bounded by construction** (measured: ~630 B per row
   in today's file; a tab can return 1000 rows, `linear.go:216`):
-  - each list keeps its first 300 rows (the list says "300 of N shown from
+  - each list keeps its first 100 rows (the list says "100 of N shown from
     before" while cached; the fresh answer shows all);
   - project lists: 20, oldest first; states: 30 teams;
   - then, while the lists file is over 400 KB, whole workspaces go, the
