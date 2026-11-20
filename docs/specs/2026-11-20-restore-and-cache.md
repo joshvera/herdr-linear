@@ -1,7 +1,8 @@
 # The Linear popup reopens where you left it, and shows what it knows at once
 
-Status: reviewed once (Opus, 2026-11-20), findings folded in (B1-B2,
-S1-S12, N1-N9). Re-review of the fixes pending.
+Status: reviewed twice (Opus, 2026-11-20). The second review's findings are
+folded in (see "Second review" at the end) and built; they have not been
+reviewed again apart from the whole-branch review of the build.
 
 ## Why
 
@@ -190,7 +191,10 @@ offset. Hand-tested.
 Two files in the app's folder, as the GitHub mod's (`cache.js`, `store.js`
 there), version 2:
 
-- `linear-cache.json` (lists; read on every open):
+- `linear-lists.json` (lists; read on every open). A new name: today's
+  `linear-cache.json` was written uncapped and may be past `readTextFile`'s
+  1 MiB, which would block every compare-and-swap. The old file is left
+  alone and no longer read:
   ```json
   { "version": 2,
     "who": { "machine": "", "at": 1795017543000 },
@@ -437,3 +441,47 @@ opened from GitHub.
 `gofmt -l`, `go vet ./...`, `go test -race -count=1 ./...`,
 `sh scripts/test-build.sh`, `node --test app/mods/linear/test/*.test.mjs`,
 `herdr-app check app/mods/linear`.
+
+## Second review (Opus, 2026-11-20): what changed
+
+- **Answers from before a machine switch** are dropped as they land: each
+  load and detail request carries the copy's `gen`, bumped on a switch,
+  and an answer under an old `gen` is neither shown nor written. The list
+  objects are replaced on a switch, so fresh loads aren't blocked by the
+  old ones' `loading`. A details file whose `who.machine` isn't the copy's
+  is read as empty.
+- **A create is never sent twice.** `linear()` retries after a failure only
+  for reads: `create`, `set-state` and `start` are never re-sent. `sentAt`
+  is written and flushed to disk before the create goes, and a failure
+  keeps it (Linear may have made it): the next enter only says so, the one
+  after sends.
+- **Selection write-back:** when the chosen id is gone, the row at its old
+  position is shown chosen, and becomes the choice (`sel`) only once that
+  list is live. A filter change, a tab change, a workspace switch and a
+  drill choose the first row; back, undrill and a click choose by id.
+- **The cap ladder** keeps the workspace in use: over 400 KB, project
+  lists go first (oldest first), then other workspaces (least recently
+  saved first), then the kept workspace's rows are halved, largest list
+  first, never below 10. Tested: one workspace over the bound keeps all
+  three tabs, non-empty.
+- **Who cannot flip back.** A patch carries `base`, the file's `who.at` the
+  copy last saw. Another machine's who replaces the file only if `base` is
+  at least the file's `who.at`. A copy that never saw a switch can't undo
+  it, even with a later status answer. `findLinear` re-reads the file's
+  who first and starts from its machine when another copy moved it.
+- **Status alone never empties the files** (a locked keychain looks like a
+  sign-out): signed out everywhere clears the screen; the files lose a
+  workspace only when a load in it answers signed out, and only from a
+  request sent after status settled (an earlier one may have gone to the
+  wrong machine; it is asked again). `findLinear` no longer moves a shown
+  workspace that status merely didn't list.
+- **The create gate retries:** a create refused for a failed or missing
+  teams or statuses fetch asks for it again. A live teams answer keeps the
+  team chosen; a team's cached statuses are refreshed once per form.
+- **Worktrees** take the project's row from the live Projects list (its
+  branch and teams exist only there), say "It isn't among the open
+  projects any more." when the live list lacks it, and capture the
+  workspace and its key on entry. `ctrl-t` is refused while busy.
+- **Demo** never reads or writes the spot or the draft. The status menu is
+  cleared with the screen on a switch or sign-out. A restored filter
+  searches again after the lists load.

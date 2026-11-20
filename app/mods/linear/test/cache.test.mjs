@@ -61,10 +61,22 @@ test("who is the machine: another machine is another who, a later confirmation i
 
 test("a newer who from another machine replaces the whole file", async () => {
   const f = memFile(JSON.stringify({ ...empty("lists", here), lists: { "w1/mine": list([row(1)], 1) } }));
-  await writeWith(f, "p", "lists", { who: vps, lists: { "w2/mine": list([row(9)], 2) } }, () => NOW);
+  await writeWith(f, "p", "lists", { who: vps, base: here.at, lists: { "w2/mine": list([row(9)], 2) } }, () => NOW);
   const doc = parse(f.text, "lists");
   assert.deepEqual(doc.who, vps);
   assert.deepEqual(Object.keys(doc.lists), ["w2/mine"]);
+});
+
+test("a copy that never saw the switch can't switch the file back, even confirming later", async () => {
+  // A moved the file to vps (claiming it from here's t1); B read here's file
+  // at t1 and its status on here answers after A's switch.
+  const f = memFile(JSON.stringify({ ...empty("lists", vps), lists: { "w2/mine": list([row(9)], 2) } }));
+  const late = whoOf("", NOW + 5000);
+  assert.equal(await writeWith(f, "p", "lists", { who: late, base: NOW - 1000, lists: { "w1/mine": list([row(1)], 3) } }, () => NOW), false);
+  assert.deepEqual(parse(f.text, "lists").who, vps);
+  // A copy that had seen vps's file may move it on.
+  assert.equal(await writeWith(f, "p", "lists", { who: late, base: vps.at, lists: {} }, () => NOW), true);
+  assert.deepEqual(parse(f.text, "lists").who, late);
 });
 
 test("a copy still on the old machine can't write its rows back after the switch", async () => {
@@ -137,8 +149,23 @@ test("the worst case stays under the lists file's bound, the least recent worksp
   const out = applyPatch(empty("lists"), { who: here, lists }, "lists", NOW);
   assert.ok(utf8Length(JSON.stringify(out)) <= LIMITS.listBytes);
   const kept = new Set(Object.keys(out.lists).map((k) => k.split("/")[0]));
-  assert.ok(kept.has("w3"), "the most recent workspace stays");
   assert.ok(!kept.has("w1"), "the least recent goes first");
+  for (const tab of ["mine", "projects", "recent"]) assert.ok(out.lists[`w3/${tab}`]?.items.length > 0, `w3/${tab} kept, not empty`);
+});
+
+test("one workspace over the bound loses its project lists first, then rows, never its tabs", () => {
+  const long = (i) => row(`r${i}`, { title: "x".repeat(900), url: "u".repeat(300), branch: "b".repeat(200) });
+  const lists = {};
+  for (const tab of ["mine", "projects", "recent"]) lists[`w1/${tab}`] = list(Array.from({ length: 100 }, (_, i) => long(i)), 10);
+  lists["w1/project/p1"] = list(Array.from({ length: 100 }, (_, i) => long(i)), 1);
+  const out = applyPatch(empty("lists"), { who: here, lists }, "lists", NOW);
+  assert.ok(utf8Length(JSON.stringify(out)) <= LIMITS.listBytes);
+  assert.ok(!("w1/project/p1" in out.lists));
+  for (const tab of ["mine", "projects", "recent"]) {
+    const l = out.lists[`w1/${tab}`];
+    assert.ok(l.items.length > 0);
+    assert.equal(l.total ?? l.items.length, 100, "a trimmed list says how many there were");
+  }
 });
 
 test("details: at most 50, none older than 30 days, under their byte bound", () => {
@@ -288,4 +315,5 @@ test("starting an issue may use any row; a worktree alone, or a project's, needs
   assert.equal(mayWorktree({ start: false, issue: true, live: false }).ok, false);
   assert.equal(mayWorktree({ start: true, issue: false, live: false }).ok, false);
   assert.equal(mayWorktree({ start: false, issue: false, live: true }).ok, true);
+  assert.deepEqual(mayWorktree({ start: false, issue: false, live: false, absent: true }), { ok: false, why: "It isn't among the open projects any more." });
 });

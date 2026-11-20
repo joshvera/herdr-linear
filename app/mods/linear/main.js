@@ -109,6 +109,8 @@ const TABS = [
 // the whole workspace, not only your issues.
 const ISSUE_KEY = /^(?:[A-Za-z][A-Za-z0-9_]*-)?\d{1,9}$/;
 const MIN_SEARCH = 3; // minSearchLen in linear.go
+// The ops that change Linear: never sent again on a failure.
+const CHANGES = new Set(["create", "set-state", "start"]);
 
 // The list's heights: a heading's, a row's (34 and a gap), and the most it
 // takes before it scrolls.
@@ -239,6 +241,7 @@ export default class Linear extends View {
       else if (spot?.screen === "create") this.create(cx);
       else if (spot?.drilled) this.loadProject(spot.drilled, cx);
       await this.start(cx);
+      if (this.filter) this.lookUp(cx);
       if (p.issue) await this.openByKey(p.issue, cx);
       cx.notify();
     });
@@ -338,6 +341,13 @@ export default class Linear extends View {
   }
 
   async searchLinear() {
+    // Another copy may have moved the cache to another machine since this
+    // one read it: start from there.
+    const doc = this.demo ? null : await this.store.read("lists");
+    if (doc?.who && doc.who.at > (this.seenAt ?? 0) && !sameWho(doc.who, this.who)) {
+      this.on = doc.who.machine;
+      this.seenAt = doc.who.at;
+    }
     const order = [this.on, "", ...machines().filter((m) => m.name && m.layout !== "unavailable").map((m) => m.name)];
     const tried = new Set();
     let last;
@@ -349,7 +359,9 @@ export default class Linear extends View {
         if (!s.workspaces.length) continue;
         this.on = m;
         this.workspaces = s.workspaces;
-        if (!this.workspaces.some((w) => w.id === this.ws)) this.ws = this.workspaces[0].id;
+        // One missing from status may only be a locked keychain: it stays
+        // shown until a load in it answers signed out (signedOutOf).
+        if (!this.ws) this.ws = this.workspaces[0].id;
         this.confirmWho(m);
         return;
       } catch (e) {
@@ -369,6 +381,10 @@ export default class Linear extends View {
   confirmWho(machine) {
     const next = whoOf(machine, Date.now());
     if (this.who && !sameWho(this.who, next)) {
+      // Every answer asked before this is the old sign-in's: dropped as it
+      // lands (`gen`), on screen and on disk.
+      this.gen = (this.gen ?? 0) + 1;
+      this.menu = null;
       this.lists = {};
       this.cache = null;
       this.whoChanged = true;
@@ -377,13 +393,15 @@ export default class Linear extends View {
       if (this.projInfo?.cached) this.projDetail = this.projInfo = null;
       if (this.form) this.form.teams = null;
       this.dropSpot();
-      this.store.write("details", { who: next, clear: true });
+      const base = this.seenAt ?? 0;
       this.who = next;
-      this.store.write("lists", { who: next, workspaces: this.workspaces, clear: true });
+      this.seenAt = next.at;
+      this.store.write("details", { who: next, base, clear: true });
+      this.store.write("lists", { who: next, base, workspaces: this.workspaces, clear: true });
       return;
     }
     this.who = next;
-    this.store.write("lists", { who: next, workspaces: this.workspaces });
+    this.store.write("lists", this.patch({ workspaces: this.workspaces }));
   }
 
   // The who a write goes under: status's, else the file's (an answer from
@@ -393,19 +411,32 @@ export default class Linear extends View {
     return this.who ?? whoOf(this.on ?? "", 0);
   }
 
+  // A write to the cache: under the who now, and the file's `who.at` this
+  // copy last saw (`seenAt`), so it can't replace a machine it never saw
+  // the file switch to (cache.js applyPatch).
+  patch(p) {
+    return { who: this.whoNow(), base: this.seenAt ?? 0, ...p };
+  }
+
   // One request to Linear, in workspace `ws`: the one shown when the caller
   // asked, never re-read here, so an answer always belongs to the workspace
   // it was asked in.
+  // A change is never sent twice: a failure there may have come after
+  // Linear did it. A signed-out answer to a request sent before status
+  // settled may be the wrong machine's: start() asks again, and only then
+  // does it count.
   async linear(req, ws) {
     if (this.demo) return ask({ ...req, demo: true }, null);
     if (this.on == null) await this.findLinear();
+    const settled = Boolean(this.settled);
     try {
       return await ask({ ...req, workspace: ws }, this.on || null);
     } catch (e) {
       if (e instanceof AppError) {
-        if (e.signedOut && ws) this.signedOutOf(ws);
+        if (e.signedOut && ws && settled) this.signedOutOf(ws);
         throw e;
       }
+      if (CHANGES.has(req.op)) throw e;
       await this.findLinear();
       return ask({ ...req, workspace: ws }, this.on || null);
     }
@@ -429,6 +460,7 @@ export default class Linear extends View {
     if (early) this.loadAll(cx);
     try {
       await this.findLinear();
+      this.settled = true;
     } catch (e) {
       this.signedOut = Boolean(e?.signedOut);
       this.err = this.signedOut ? "" : String(e?.message ?? e);
@@ -445,6 +477,8 @@ export default class Linear extends View {
       }
       this.seedAll();
       this.loadAll(cx);
+      if (this.screen === "issue" && this.cur && !this.detailInfo) this.loadDetail(cx);
+      if (this.screen === "project" && this.curProject && !this.projInfo) this.loadProjectDetail(cx);
     } else {
       // The early loads stand; one that failed (the machine was away) is
       // asked again now status has found where Linear answers.
@@ -454,8 +488,8 @@ export default class Linear extends View {
     cx.notify();
   }
 
-  // Signed out everywhere: nothing from before stays, on screen or on disk;
-  // the sign-in shows, which is drawn on the list.
+  // Signed out everywhere: nothing from before stays on screen; the sign-in
+  // shows, which is drawn on the list.
   toSignedOut() {
     this.screen = "list";
     this.cur = this.detail = this.detailInfo = this.projDetail = this.projInfo = this.curProject = this.form = this.menu = null;
@@ -464,11 +498,8 @@ export default class Linear extends View {
     this.sel = null;
     this.dropSpot();
     this.keys.focus();
-    if (this.who) {
-      const who = { ...this.who, at: Date.now() };
-      this.store.write("lists", { who, clear: true });
-      this.store.write("details", { who, clear: true });
-    }
+    // The files stay: status finding nothing may only be a locked keychain.
+    // A workspace's entries go when a load in it answers signed out.
   }
 
   // A load in `ws` answered signed out: that workspace's cache goes. If it's
@@ -477,9 +508,8 @@ export default class Linear extends View {
   signedOutOf(ws) {
     if (this.demo || this.dropping?.has(ws)) return;
     (this.dropping ??= new Set()).add(ws);
-    const who = this.whoNow();
-    this.store.write("lists", { who, drop: [ws] });
-    this.store.write("details", { who, drop: [ws] });
+    this.store.write("lists", this.patch({ drop: [ws] }));
+    this.store.write("details", this.patch({ drop: [ws] }));
     this.workspaces = this.workspaces.filter((w) => w.id !== ws);
     if (ws !== this.ws) return;
     this.dropSpot();
@@ -512,7 +542,7 @@ export default class Linear extends View {
   }
 
   switchWorkspace(cx) {
-    if (this.demo || this.workspaces.length < 2) return;
+    if (this.demo || this.workspaces.length < 2 || this.busy) return;
     const i = this.workspaces.findIndex((w) => w.id === this.ws);
     this.ws = this.workspaces[(i + 1) % this.workspaces.length].id;
     this.remember("workspace", this.ws);
@@ -541,6 +571,7 @@ export default class Linear extends View {
       if (!this.demo) {
         this.cache = doc;
         this.who = doc.who;
+        this.seenAt = doc.who?.at ?? 0;
         // The machine that answered last, shared by every copy; this copy's
         // own memory of it (before the cache had one) as a fallback.
         this.on = doc.who ? doc.who.machine : localStorage.getItem("on");
@@ -573,7 +604,7 @@ export default class Linear extends View {
   // it was asked for.
   keepList(key, l, saved) {
     if (this.demo) return;
-    this.store.write("lists", { who: this.whoNow(), lists: { [key]: { items: l.items, warning: l.warning ?? "", saved } } });
+    this.store.write("lists", this.patch({ lists: { [key]: { items: l.items, warning: l.warning ?? "", saved } } }));
   }
 
   load(tab, cx, req = { op: "list", tab }) {
@@ -585,9 +616,11 @@ export default class Linear extends View {
     const ws = this.ws;
     const at = this.stamp();
     const key = tab === "project" ? `${ws}/project/${pid}` : `${ws}/${tab}`;
+    const gen = this.gen;
     cx.spawn(async (cx) => {
       try {
         const res = await this.linear(req, ws);
+        if (gen !== this.gen) return; // another sign-in's answer
         const items = res.issues ?? res.projects ?? [];
         // Kept under what it was asked for, whatever is shown now.
         this.keepList(key, { items, warning: res.warning ?? "" }, at);
@@ -603,6 +636,7 @@ export default class Linear extends View {
         l.cached = false;
         l.saved = at;
       } catch (e) {
+        if (gen !== this.gen) return;
         if (tab === "project" && isGone(e) && this.drilled?.id === pid && ws === this.ws) {
           l.loading = false;
           return this.projectGone(this.drilled, cx);
@@ -759,6 +793,7 @@ export default class Linear extends View {
     const ws = this.ws;
     const at = this.stamp();
     const key = `${ws}/issue/${is.id}`;
+    const gen = this.gen;
     this.detailLoading = true;
     this.detailErr = "";
     cx.spawn(async (cx) => {
@@ -770,8 +805,9 @@ export default class Linear extends View {
       }
       try {
         const d = await this.linear({ op: "detail", issue: is.id }, ws);
+        if (gen !== this.gen) return;
         if (isGone(d)) return this.issueGone(is, ws, cx);
-        if (!this.demo) this.store.write("details", { who: this.whoNow(), details: { [key]: { d, saved: at } } });
+        if (!this.demo) this.store.write("details", this.patch({ details: { [key]: { d, saved: at } } }));
         if (takesOver(this.shownIssue(), this.detailInfo, { ws, id: is.id, at, cached: false })) {
           this.detail = d;
           this.detailInfo = { ws, id: is.id, at, cached: false };
@@ -780,6 +816,7 @@ export default class Linear extends View {
           this.replaceRow(d.issue);
         }
       } catch (e) {
+        if (gen !== this.gen) return;
         if (isGone(e)) return this.issueGone(is, ws, cx);
         if (this.cur?.id === is.id) {
           this.detailErr = String(e?.message ?? e);
@@ -840,6 +877,7 @@ export default class Linear extends View {
     const ws = this.ws;
     const at = this.stamp();
     const key = `${ws}/project/${p.id}`;
+    const gen = this.gen;
     this.projLoading = true;
     this.projErr = "";
     cx.spawn(async (cx) => {
@@ -851,13 +889,15 @@ export default class Linear extends View {
       }
       try {
         const d = await this.linear({ op: "project", project: p.id }, ws);
-        if (!this.demo) this.store.write("details", { who: this.whoNow(), details: { [key]: { d, saved: at } } });
+        if (gen !== this.gen) return;
+        if (!this.demo) this.store.write("details", this.patch({ details: { [key]: { d, saved: at } } }));
         if (takesOver(this.shownProject(), this.projInfo, { ws, id: p.id, at, cached: false })) {
           this.projDetail = d;
           this.projInfo = { ws, id: p.id, at, cached: false };
           this.projErr = "";
         }
       } catch (e) {
+        if (gen !== this.gen) return;
         if (isGone(e)) return this.projectGone(p, cx);
         if (this.curProject?.id === p.id) {
           this.projErr = String(e?.message ?? e);
@@ -1072,12 +1112,16 @@ export default class Linear extends View {
   // in a new worktree: an existing one's agent may be busy).
   worktree(cx, start, what = this.screen === "project" ? { project: this.curProject } : { issue: this.cur }) {
     const is = what.issue;
-    const pr = what.project;
+    let pr = what.project;
     if (!is && !pr) return;
     // A worktree is built from the row's branch, team and title; only
     // starting an issue re-reads it first, so anything else needs it live.
-    if (!this.may(mayWorktree({ start, issue: Boolean(is), live: is ? this.detailInfo?.id === is.id && !this.detailInfo.cached : this.projectLive(pr) }), cx)) return;
+    if (!this.may(mayWorktree({ start, issue: Boolean(is), live: is ? this.detailInfo?.id === is.id && !this.detailInfo.cached : Boolean(this.liveProject(pr)),
+      absent: Boolean(pr && this.lists.projects?.loaded && !this.lists.projects.cached && !this.liveProject(pr)) }), cx)) return;
+    // Everything it builds from, taken now: it can run for minutes.
     const ws = this.ws;
+    const workspaceKey = this.workspace()?.urlKey ?? "";
+    if (pr) pr = this.liveProject(pr);
     const name = is ? is.identifier : pr.name;
     this.busy = start ? `Starting ${name}…` : `Opening ${name}'s worktree…`;
     this.menu = null;
@@ -1092,7 +1136,6 @@ export default class Linear extends View {
           return Promise.race([p, new Promise((_, no) => cx.timer.after(ms, () => no(new Error(`${label.replace(/…$/, "")} took too long`))))]);
         };
         if (start && is) fresh = (await step(`Checking ${is.identifier} in Linear…`, this.linear({ op: "check-start", issue: is.id }, ws))).issue;
-        const workspaceKey = this.workspace()?.urlKey ?? "";
         const target = is
           ? { branch: fresh.branch, label: `${fresh.identifier} ${fresh.title}`, teamKey: fresh.teamKey, workspaceKey, identifier: fresh.identifier, title: fresh.title, url: fresh.url }
           : { branch: pr.branch, label: pr.name, teamKey: pr.teamKey, workspaceKey, project: pr.name, url: pr.url };
@@ -1153,11 +1196,11 @@ export default class Linear extends View {
     });
   }
 
-  // Whether a project's row is from a live answer: the Projects list, or its
-  // own screen's.
-  projectLive(p) {
+  // A project's row from the live Projects list (its branch and teams come
+  // only from there), or null while that's cached or doesn't have it.
+  liveProject(p) {
     const l = this.lists.projects;
-    return Boolean((l?.loaded && !l.cached && l.items.some((x) => x.id === p.id)) || (this.projInfo?.id === p.id && !this.projInfo.cached));
+    return l?.loaded && !l.cached ? l.items.find((x) => x.id === p.id) ?? null : null;
   }
 
   // The agents working on an issue: those in a pane on its branch.
@@ -1198,7 +1241,7 @@ export default class Linear extends View {
         const res = await this.linear({ op: "teams" }, ws);
         if (this.form !== f) return;
         this.gotTeams(res.teams, { loaded: true, cached: false }, cx);
-        if (!this.demo) this.store.write("lists", { who: this.whoNow(), lists: { [`${ws}/teams`]: { items: res.teams, saved: Date.now() } } });
+        if (!this.demo) this.store.write("lists", this.patch({ lists: { [`${ws}/teams`]: { items: res.teams, saved: Date.now() } } }));
       } catch (e) {
         if (this.form !== f) return;
         f.teamsInfo = { ...f.teamsInfo, error: String(e?.message ?? e) };
@@ -1241,7 +1284,7 @@ export default class Linear extends View {
           const states = (await this.linear({ op: "states", team: t.id }, ws)).states;
           if (this.form !== f) return;
           this.gotStates(t, states, { loaded: true, cached: false });
-          if (!this.demo) this.store.write("lists", { who: this.whoNow(), lists: { [`${ws}/states/${t.id}`]: { items: states, saved: Date.now() } } });
+          if (!this.demo) this.store.write("lists", this.patch({ lists: { [`${ws}/states/${t.id}`]: { items: states, saved: Date.now() } } }));
         } catch (e) {
           if (this.form === f) f.statesInfo[t.id] = { ...f.statesInfo[t.id], error: `Its statuses didn't load: ${e?.message ?? e}` };
         }
@@ -1319,7 +1362,7 @@ export default class Linear extends View {
   submit(cx) {
     const f = this.form;
     if (!f || this.busy) return;
-    if (!this.may(mayCreate({ teams: f.teamsInfo, states: f.team && f.statesInfo[f.team.id], projects: this.lists.projects, stateChosen: f.stateChosen, projectSet: Boolean(f.project) }), cx)) return;
+    if (!this.may(mayCreate({ teams: f.teamsInfo, states: f.team && f.statesInfo[f.team.id], projects: this.lists.projects, stateChosen: f.stateChosen, projectSet: Boolean(f.project) }), cx)) return this.retryForm(cx);
     const title = this.title.value().trim();
     if (!title) return this.say("Give it a title first.", cx, true);
     if (!f.team) return this.say("Still loading your teams; try again in a moment.", cx, true);
@@ -1330,12 +1373,14 @@ export default class Linear extends View {
       this.setDraft({ ...this.draft, sentAt: 0 });
       return this.say("It may already exist (see Recent): enter again to create it anyway.", cx, true);
     }
-    // Marked as sent before it goes, so a close mid-send can't make it twice.
+    // Marked as sent, and on disk, before it goes: a close mid-send, or a
+    // failure that came after Linear made it, can't make it twice.
     if (this.draft) this.setDraft({ ...this.draft, sentAt: Date.now() });
     const ws = f.ws;
     this.busy = `Creating ${title}…`;
     cx.notify();
     cx.spawn(async (cx) => {
+      if (!checking()) await localStorage.flush();
       try {
         const res = await this.linear({ op: "create", new: { team: f.team.id, title, description: this.desc.value(), project: f.project ?? "", state: f.state ?? "", priority: f.priority, assignToMe: f.assignToMe } }, ws);
         if (this.draft?.ws === ws) this.setDraft(null);
@@ -1345,11 +1390,36 @@ export default class Linear extends View {
         this.openIssue(res.issue, cx);
         this.say(res.note, cx);
       } catch (e) {
-        if (this.draft?.ws === ws) this.setDraft({ ...this.draft, sentAt: 0 });
+        // Whether Linear made it isn't known, so sentAt stays: the next
+        // enter says it may exist before it sends again.
         this.busy = "";
-        this.say(String(e?.message ?? e), cx, true);
+        this.say(`${e?.message ?? e}. It may have been created anyway: see Recent before sending again.`, cx, true);
       }
     });
+  }
+
+  // What the form waits on and didn't get: asked again (a create refused
+  // for it is how it's retried).
+  retryForm(cx) {
+    const f = this.form;
+    if (!f) return;
+    if (!f.teamsInfo.loaded || f.teamsInfo.error) {
+      if (!f.teamsInfo.retrying) {
+        f.teamsInfo.retrying = true;
+        cx.spawn(async (cx) => {
+          try {
+            const res = await this.linear({ op: "teams" }, f.ws);
+            if (this.form === f) this.gotTeams(res.teams, { loaded: true, cached: false }, cx);
+          } catch (e) {
+            if (this.form === f) f.teamsInfo = { ...f.teamsInfo, error: String(e?.message ?? e), retrying: false };
+          }
+          cx.notify();
+        });
+      }
+    } else if (f.team && f.statesInfo[f.team.id]?.error) {
+      f.statesInfo[f.team.id] = { ...f.statesInfo[f.team.id], error: "" };
+      this.pickTeam(f.team, cx);
+    }
   }
 
   // ── keys ───────────────────────────────────────────────────────────────

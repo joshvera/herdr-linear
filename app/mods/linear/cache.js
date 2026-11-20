@@ -88,6 +88,10 @@ export const wsOf = (key) => key.slice(0, key.indexOf("/"));
 
 // A copy's write onto what the file holds now. `patch`:
 //   who           the who it was answered under (required)
+//   base          the file's `who.at` when this copy last read or claimed
+//                 it: another machine's who replaces the file only if this
+//                 copy had seen it, so a copy that never saw a switch
+//                 can't switch it back
 //   lists/details entries by key
 //   workspaces    what status said, for the workspace switcher
 //   drop          workspace ids whose loads answered signed out
@@ -101,7 +105,7 @@ export function applyPatch(doc, patch, kind, now) {
     out = { ...doc, who: doc.who.at >= patch.who.at ? doc.who : patch.who };
     for (const m of MAPS[kind]) out[m] = { ...doc[m] };
   } else {
-    if (doc.who && doc.who.at > patch.who.at) return null;
+    if (doc.who && (doc.who.at > patch.who.at || (patch.base ?? 0) < doc.who.at)) return null;
     out = empty(kind, patch.who);
   }
   if (patch.clear) return empty(kind, out.who);
@@ -142,13 +146,28 @@ export function prune(doc, kind, now) {
   }
   Object.assign(lists, newest(projects, LIMITS.projectLists, Infinity), newest(states, LIMITS.states, Infinity));
   out.lists = lists;
-  // Still too big: whole workspaces go, the one saved least recently first.
-  while (utf8Length(JSON.stringify(out)) > LIMITS.listBytes) {
+  // Still too big: project lists go first, oldest first; then other
+  // workspaces, the one saved least recently first; then the rows of the
+  // workspace kept, halved, so it always keeps something.
+  const size = () => utf8Length(JSON.stringify(out));
+  while (size() > LIMITS.listBytes) {
+    const entries = Object.entries(out.lists);
+    const projs = entries.filter(([k]) => k.includes("/project/")).sort((a, b) => a[1].saved - b[1].saved);
+    if (projs.length) {
+      delete out.lists[projs[0][0]];
+      continue;
+    }
     const last = new Map();
-    for (const [k, e] of Object.entries(out.lists)) last.set(wsOf(k), Math.max(last.get(wsOf(k)) ?? 0, e.saved));
-    if (last.size === 0) break;
-    const oldest = [...last].sort((a, b) => a[1] - b[1])[0][0];
-    out.lists = Object.fromEntries(Object.entries(out.lists).filter(([k]) => wsOf(k) !== oldest));
+    for (const [k, e] of entries) last.set(wsOf(k), Math.max(last.get(wsOf(k)) ?? 0, e.saved));
+    if (last.size > 1) {
+      const oldest = [...last].sort((a, b) => a[1] - b[1])[0][0];
+      out.lists = Object.fromEntries(entries.filter(([k]) => wsOf(k) !== oldest));
+      continue;
+    }
+    const big = entries.filter(([, e]) => Array.isArray(e.items) && e.items.length > 10).sort((a, b) => b[1].items.length - a[1].items.length)[0];
+    if (!big) break;
+    const [k, e] = big;
+    out.lists = { ...out.lists, [k]: { ...e, items: e.items.slice(0, Math.ceil(e.items.length / 2)), total: e.total ?? e.items.length } };
   }
   return out;
 }
@@ -310,7 +329,10 @@ export function mayCreate({ teams, states, projects, stateChosen, projectSet }) 
 // A worktree: starting an issue re-reads it in the binary first and builds
 // the worktree from that answer, so any row will do; otherwise the branch,
 // team and title come from the row, so it must be from a live answer.
-export function mayWorktree({ start, issue, live }) {
+// `absent`: the live list answered without it (a project completed or
+// canceled leaves the open projects), so waiting won't help.
+export function mayWorktree({ start, issue, live, absent }) {
   if (start && issue) return { ok: true, why: "" };
-  return live ? { ok: true, why: "" } : refreshing("");
+  if (live) return { ok: true, why: "" };
+  return absent ? { ok: false, why: "It isn't among the open projects any more." } : refreshing("");
 }

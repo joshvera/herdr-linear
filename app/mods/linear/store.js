@@ -10,7 +10,7 @@ const io = { read: (path) => readTextFile(path), write: (path, text, expected) =
 // One per copy of the popup: copies share the module, not their queues.
 export class Store {
   constructor() {
-    this.paths = { lists: `${appHome()}/linear-cache.json`, details: `${appHome()}/linear-details.json` };
+    this.paths = { lists: `${appHome()}/linear-lists.json`, details: `${appHome()}/linear-details.json` };
     this.queue = serial();
   }
 

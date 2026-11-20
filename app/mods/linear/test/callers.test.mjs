@@ -68,3 +68,29 @@ test("the selection is an id: moving sets sel, and the row acted on is derived f
   assert.match(body("chooseRow"), /pickRow\(/);
   assert.match(body("render"), /this\.chooseRow\(\)/);
 });
+
+test("a change to Linear is never sent again after a failure", () => {
+  const l = body("linear");
+  assert.ok(l.indexOf("if (CHANGES.has(req.op)) throw e;") >= 0 && l.indexOf("if (CHANGES.has(req.op)) throw e;") < l.indexOf("await this.findLinear();\n      return ask("));
+  assert.match(src, /const CHANGES = new Set\(\["create", "set-state", "start"\]\)/);
+});
+
+test("a failed create keeps the draft marked as sent, written to disk before it goes", () => {
+  const b = body("submit");
+  const catchAt = b.lastIndexOf("} catch (e) {");
+  assert.doesNotMatch(b.slice(catchAt), /sentAt: 0/);
+  assert.ok(b.indexOf("sentAt: Date.now()") < b.indexOf("await localStorage.flush()"));
+  assert.ok(b.indexOf("await localStorage.flush()") < b.indexOf('op: "create"'));
+});
+
+test("status finding no one clears the screen but not the files", () => {
+  assert.doesNotMatch(body("toSignedOut"), /store\.write/);
+});
+
+test("an answer asked under another sign-in is dropped as it lands", () => {
+  for (const name of ["load", "loadDetail", "loadProjectDetail"]) {
+    const b = body(name);
+    assert.match(b, /const gen = this\.gen;/, name);
+    assert.ok((b.match(/if \(gen !== this\.gen\) return;/g) ?? []).length >= 2, `${name} checks after an answer and after a failure`);
+  }
+});
