@@ -191,7 +191,7 @@ export default class Linear extends View {
       this.sel = spot.sel;
       this.at = spot.row;
       this.reveal = true;
-    } else if (Object.values(this.drafts).some(hasText)) {
+    } else if (hasText(this.drafts[this.ws] ?? { title: "", description: "" })) {
       this.flash = "A new issue draft is kept: ctrl+n";
     }
 
@@ -247,6 +247,7 @@ export default class Linear extends View {
       cx.notify();
     });
     cx.timer.every(60000, (cx) => this.screen === "list" && !this.busy && this.loadAll(cx));
+    this.startWaker(cx);
 
     // Key bindings and `herdr-app do`: linear.escape, linear.demo,
     // linear.next, linear.prev, linear.reload.
@@ -355,6 +356,7 @@ export default class Linear extends View {
       // Adopted, not claimed: the file is already that machine's, with what
       // the other copy has written into it since, so nothing is cleared.
       if (this.who) this.dropShown();
+      this.cache = doc; // valid for the machine adopted: drawn from at once
       this.who = doc.who;
       this.on = doc.who.machine;
       this.seenAt = doc.who.at;
@@ -407,7 +409,7 @@ export default class Linear extends View {
 
   // What's shown came from another sign-in (another machine): it goes before
   // the next frame, and every answer asked before now is dropped as it lands
-  // (`gen`). The next task with a cx loads again (reloadAfterSwitch).
+  // (`gen`). The waker loads it again (startWaker).
   dropShown() {
     this.gen = (this.gen ?? 0) + 1;
     this.menu = null;
@@ -416,23 +418,34 @@ export default class Linear extends View {
     this.whoChanged = true;
     this.found = null;
     this.detail = this.detailInfo = this.projDetail = this.projInfo = null;
-    if (this.form) this.form = { ...this.form, teams: null, teamsInfo: { loaded: false }, states: {}, statesInfo: {} };
+    // The form keeps what was chosen as what's wanted, so the fresh teams
+    // pick the same team again, and its statuses are asked for again.
+    const f = this.form;
+    if (f) {
+      this.form = { ...f, team: null, wantTeam: f.team?.key ?? f.wantTeam, wantState: f.stateChosen ? f.state : f.wantState,
+        stateChosen: false, teams: null, teamsInfo: { loaded: false }, states: {}, statesInfo: {} };
+    }
     this.dropSpot();
+    this.wake?.();
   }
 
   // After a switch or a workspace signed out, what's shown is asked for
-  // again, once per change, by whichever task notices first: a load, a
-  // detail or a project's, which all have a cx (render has none to spare).
-  reloadAfterSwitch(cx) {
-    if (this.again) {
-      this.again = false;
-      this.seedAll();
-      this.loadAll(cx);
-      cx.notify();
-    }
-    if (this.reloaded === this.gen) return;
-    this.reloaded = this.gen;
+  // again, whatever noticed it (a load, a search, the form's teams, an
+  // issue by key, a start's check): those wake this one task, which has a
+  // cx of its own, rather than each having to.
+  startWaker(cx) {
+    cx.spawn(async (cx) => {
+      for (;;) {
+        await new Promise((wake) => (this.wake = wake));
+        this.reloadShown(cx);
+      }
+    });
+  }
+
+  reloadShown(cx) {
+    if (this.demo || this.signedOut) return;
     this.whoChanged = false;
+    this.reloaded = this.gen;
     this.seedAll();
     this.loadAll(cx);
     if (this.screen === "issue" && this.cur && !this.detailInfo) this.loadDetail(cx);
@@ -440,6 +453,7 @@ export default class Linear extends View {
     if (this.screen === "create" && this.form && !this.form.teams) this.retryForm(cx);
     cx.notify();
   }
+
 
 
   // The who a write goes under: status's, else the file's (an answer from
@@ -564,7 +578,8 @@ export default class Linear extends View {
       return;
     }
     this.ws = this.workspaces[0].id;
-    this.again = true; // loaded by the task that asked (reloadAfterSwitch)
+    this.gen = (this.gen ?? 0) + 1; // answers asked in the old workspace are dropped
+    this.wake?.();
   }
 
   // Signs in in a terminal of its own, on this computer, where the browser
@@ -661,7 +676,7 @@ export default class Linear extends View {
     cx.spawn(async (cx) => {
       try {
         const res = await this.linear(req, ws);
-        if (gen !== this.gen) return this.reloadAfterSwitch(cx); // another sign-in's answer
+        if (gen !== this.gen) return; // another sign-in's, or a workspace now gone: the waker reloads
         const items = res.issues ?? res.projects ?? [];
         // Kept under what it was asked for, whatever is shown now.
         this.keepList(key, { items, warning: res.warning ?? "" }, at);
@@ -677,7 +692,7 @@ export default class Linear extends View {
         l.cached = false;
         l.saved = at;
       } catch (e) {
-        if (gen !== this.gen || this.again) return this.reloadAfterSwitch(cx);
+        if (gen !== this.gen) return;
         if (tab === "project" && isGone(e) && this.drilled?.id === pid && ws === this.ws) {
           l.loading = false;
           return this.projectGone(this.drilled, cx);
@@ -847,7 +862,7 @@ export default class Linear extends View {
       }
       try {
         const d = await this.linear({ op: "detail", issue: is.id }, ws);
-        if (gen !== this.gen) return this.reloadAfterSwitch(cx);
+        if (gen !== this.gen) return;
         if (isGone(d)) return this.issueGone(is, ws, cx);
         if (!this.demo) this.store.write("details", this.patch({ details: { [key]: { d, saved: at } } }));
         if (takesOver(this.shownIssue(), this.detailInfo, { ws, id: is.id, at, cached: false })) {
@@ -858,7 +873,7 @@ export default class Linear extends View {
           this.replaceRow(d.issue);
         }
       } catch (e) {
-        if (gen !== this.gen || this.again) return this.reloadAfterSwitch(cx);
+        if (gen !== this.gen) return;
         if (isGone(e)) return this.issueGone(is, ws, cx);
         if (this.cur?.id === is.id) {
           this.detailErr = String(e?.message ?? e);
@@ -932,7 +947,7 @@ export default class Linear extends View {
       }
       try {
         const d = await this.linear({ op: "project", project: p.id }, ws);
-        if (gen !== this.gen) return this.reloadAfterSwitch(cx);
+        if (gen !== this.gen) return;
         if (!this.demo) this.store.write("details", this.patch({ details: { [key]: { d, saved: at } } }));
         if (takesOver(this.shownProject(), this.projInfo, { ws, id: p.id, at, cached: false })) {
           this.projDetail = d;
@@ -940,7 +955,7 @@ export default class Linear extends View {
           this.projErr = "";
         }
       } catch (e) {
-        if (gen !== this.gen || this.again) return this.reloadAfterSwitch(cx);
+        if (gen !== this.gen) return;
         if (isGone(e)) return this.projectGone(p, cx);
         if (this.curProject?.id === p.id) {
           this.projErr = String(e?.message ?? e);
@@ -1320,7 +1335,8 @@ export default class Linear extends View {
     this.remember("team", t.key);
     // Only once the Projects list is in: a project not yet listed isn't
     // a project of another team.
-    if (f.project && this.lists.projects?.loaded && !this.projectsFor(t).some((p) => p.id === f.project)) f.project = null;
+    const pl = this.lists.projects;
+    if (f.project && pl?.loaded && pl.items.length && !this.projectsFor(t).some((p) => p.id === f.project)) f.project = null;
     const kept = this.demo ? null : this.cache?.lists?.[`${ws}/states/${t.id}`];
     if (kept && !f.states[t.id]) this.gotStates(t, kept.items, { loaded: true, cached: true, saved: kept.saved });
     else if (f.states[t.id]) this.gotStates(t, f.states[t.id], f.statesInfo[t.id]);

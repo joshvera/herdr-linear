@@ -321,7 +321,8 @@ export function mayChangeState(detail) {
 export function mayCreate({ teams, states, projects, stateChosen, projectSet }) {
   for (const [need, l] of [[true, teams], [stateChosen, states], [projectSet, projects]]) {
     if (!need) continue;
-    if (!l?.loaded) return refreshing(l?.error);
+    // A list that failed with nothing to show hasn't loaded.
+    if (!l?.loaded || (l.error && !l.items?.length && Array.isArray(l.items))) return refreshing(l?.error);
     if (l.cached) return refreshing(l.error);
   }
   return { ok: true, why: "" };

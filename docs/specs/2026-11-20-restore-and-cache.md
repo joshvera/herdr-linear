@@ -493,9 +493,15 @@ opened from GitHub.
   and inherit its `sentAt` and team; a form's draft is now built only from
   its own workspace's.
 - **After a mid-session machine switch** (the machine dropped off, status
-  answered elsewhere) or a workspace signed out under the popup, the first
-  task to notice (a load, a detail, a project's) loads what's shown again.
-  Render no longer starts work.
+  answered elsewhere) or a workspace signed out under the popup, one
+  long-lived task started in `init` (the waker) loads what's shown again,
+  whatever call noticed it. Answers asked before are dropped as they land
+  (`gen`); a load that fails on a live list still stops spinning and says
+  why. On the new issue form the chosen team and status are kept as
+  wanted, so the fresh teams pick them again and the statuses are asked
+  for again. Render starts no work. (A re-review found the first version,
+  which reloaded from whichever load noticed, missed switches noticed by a
+  search, the form or a start's check, and could leave a tab spinning.)
 - **Adopting a switch another copy made** (the file is already the new
   machine's) drops what's shown but clears nothing on disk; only the copy
   that claims the switch clears the files.
@@ -508,5 +514,9 @@ opened from GitHub.
   who; one oversized detail no longer pushes out the rest.
 - Not changed: `seenAt` is not advanced when status confirms the copy's
   own machine. Doing so would let a copy that never saw another's switch
-  replace it (the flip-back the `base` rule stops); the cost is that this
-  copy's later switch is refused once and heals on its next write.
+  replace it (the flip-back the `base` rule stops). The cost: the clear
+  that claims a mid-session switch is refused (status will already have
+  moved the file's `who.at` past `seenAt`), so each file is replaced on its
+  next write instead, and other copies get no workspace list from it until
+  the next status. Follow-up: advance `seenAt` only to a `who.at` this copy
+  read or wrote for its own machine.

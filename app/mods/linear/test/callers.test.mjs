@@ -101,10 +101,10 @@ test("adopting a switch another copy made clears nothing on disk", () => {
   assert.match(body("confirmWho"), /this\.dropShown\(\)/);
 });
 
-test("after a switch, the task that notices loads again; render starts nothing", () => {
-  for (const name of ["load", "loadDetail", "loadProjectDetail"]) {
-    assert.match(body(name), /if \(gen !== this\.gen\) return this\.reloadAfterSwitch\(cx\);/, name);
-  }
+test("both ways what's shown is dropped wake the reloader; render starts nothing", () => {
+  // The reload itself is run in switch.test.mjs.
+  assert.match(body("dropShown"), /this\.wake\?\.\(\);/);
+  assert.match(body("signedOutOf"), /this\.wake\?\.\(\);/);
   assert.doesNotMatch(body("render"), /cx\.spawn\(/);
 });
 

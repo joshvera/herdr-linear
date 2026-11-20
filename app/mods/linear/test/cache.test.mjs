@@ -308,6 +308,7 @@ test("create waits only for what the form's choices were built from, and says a 
   assert.equal(mayCreate({ teams: liveL, projects: cachedL, projectSet: true }).ok, false);
   assert.deepEqual(mayCreate({ teams: liveL, states: { loaded: false, error: "states: offline" }, stateChosen: true }), { ok: false, why: "states: offline" });
   assert.equal(mayCreate({ teams: liveL, states: liveL, projects: liveL, stateChosen: true, projectSet: true }).ok, true);
+  assert.deepEqual(mayCreate({ teams: liveL, projects: { loaded: true, items: [], error: "offline" }, projectSet: true }), { ok: false, why: "offline" });
 });
 
 test("starting an issue may use any row; a worktree alone, or a project's, needs a live one", () => {

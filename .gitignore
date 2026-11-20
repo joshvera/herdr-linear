@@ -6,5 +6,5 @@
 # modules instead, so the repo stays small.
 /vendor/
 /herdr-linear
-app/mods/*/gpui-kit.d.ts
-app/mods/*/jsconfig.json
+app/mods/**/gpui-kit.d.ts
+app/mods/**/jsconfig.json
