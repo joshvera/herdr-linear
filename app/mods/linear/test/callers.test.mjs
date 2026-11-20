@@ -91,6 +91,23 @@ test("an answer asked under another sign-in is dropped as it lands", () => {
   for (const name of ["load", "loadDetail", "loadProjectDetail"]) {
     const b = body(name);
     assert.match(b, /const gen = this\.gen;/, name);
-    assert.ok((b.match(/if \(gen !== this\.gen\) return;/g) ?? []).length >= 2, `${name} checks after an answer and after a failure`);
+    assert.ok((b.match(/if \(gen !== this\.gen(?: \|\| this\.again)?\) return\b/g) ?? []).length >= 2, `${name} checks after an answer and after a failure`);
   }
+});
+
+test("adopting a switch another copy made clears nothing on disk", () => {
+  assert.doesNotMatch(body("searchLinear"), /store\.write/);
+  assert.doesNotMatch(body("dropShown"), /store\.write/);
+  assert.match(body("confirmWho"), /this\.dropShown\(\)/);
+});
+
+test("after a switch, the task that notices loads again; render starts nothing", () => {
+  for (const name of ["load", "loadDetail", "loadProjectDetail"]) {
+    assert.match(body(name), /if \(gen !== this\.gen\) return this\.reloadAfterSwitch\(cx\);/, name);
+  }
+  assert.doesNotMatch(body("render"), /cx\.spawn\(/);
+});
+
+test("the workspace shown is matched by id only", () => {
+  assert.doesNotMatch(body("workspace"), /workspaces\[0\]/);
 });

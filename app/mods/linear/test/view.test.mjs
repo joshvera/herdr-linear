@@ -3,7 +3,7 @@ import { test } from "node:test";
 import assert from "node:assert/strict";
 import {
   SPOT_TTL, openedWithProps, snapshot, restore, pickRow,
-  emptyDraft, readDraft, hasText, draftFor, onEnter, fromForm,
+  emptyDraft, readDrafts, withDraft, hasText, draftFor, onEnter, fromForm,
 } from "../view.js";
 
 const NOW = 1_800_000_000_000;
@@ -73,14 +73,30 @@ test("a frame with no rows chooses nothing (and so can't move the choice)", () =
 const typed = { ...emptyDraft("w1"), title: "Fix login" };
 
 test("the draft comes back in its own workspace only", () => {
-  assert.equal(draftFor(typed, "w1"), typed);
-  assert.equal(draftFor(typed, "w2"), null);
+  const drafts = { w1: typed };
+  assert.equal(draftFor(drafts, "w1"), typed);
+  assert.equal(draftFor(drafts, "w2"), null);
   assert.equal(draftFor(null, "w1"), null);
+});
+
+test("typing in another workspace's form keeps the first workspace's draft and its sentAt", () => {
+  const sent = { ...typed, sentAt: NOW, teamKey: "ENG", projectId: "p1", stateId: "s1" };
+  let drafts = { w1: sent };
+  const b = fromForm(drafts.w2, "w2", { team: { key: "OPS" } }, "x", "");
+  drafts = withDraft(drafts, "w2", b);
+  assert.deepEqual(drafts.w1, sent);
+  assert.equal(drafts.w2.title, "x");
+  assert.equal(drafts.w2.sentAt, 0);
+  assert.equal(onEnter(drafts.w2), "send");
+  // Even handed the other's draft, the form never inherits it.
+  assert.equal(fromForm(sent, "w2", { team: null }, "y", "").sentAt, 0);
+  assert.equal(fromForm(sent, "w2", { team: null }, "y", "").teamKey, "");
 });
 
 test("emptying the title and description clears it", () => {
   assert.equal(hasText({ ...typed, title: "  " }), false);
-  assert.equal(draftFor({ ...typed, title: "" }, "w1"), null);
+  assert.equal(draftFor({ w1: { ...typed, title: "" } }, "w1"), null);
+  assert.deepEqual(withDraft({ w1: typed, w2: typed }, "w1", null), { w2: typed });
   assert.equal(hasText({ ...typed, title: "", description: "notes" }), true);
 });
 
@@ -89,10 +105,10 @@ test("a draft whose create was sent asks before sending again", () => {
   assert.equal(onEnter({ ...typed, sentAt: NOW }), "confirm");
 });
 
-test("the draft reads back, with defaults for what an older one lacks; junk is none", () => {
-  assert.deepEqual(readDraft(JSON.stringify({ ws: "w1", title: "x" })), { ...emptyDraft("w1"), title: "x" });
-  assert.equal(readDraft("{"), null);
-  assert.equal(readDraft(JSON.stringify({ title: "no workspace" })), null);
+test("the drafts read back, with defaults for what an older one lacks; junk is left out", () => {
+  assert.deepEqual(readDrafts(JSON.stringify({ w1: { ws: "w1", title: "x" } })), { w1: { ...emptyDraft("w1"), title: "x" } });
+  assert.deepEqual(readDrafts("{"), {});
+  assert.deepEqual(readDrafts(JSON.stringify({ w1: { ws: "w2", title: "wrong slot" }, w3: "junk" })), {});
 });
 
 test("the draft takes the form's choices and keeps its own sentAt", () => {

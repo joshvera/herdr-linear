@@ -83,15 +83,29 @@ export function emptyDraft(ws) {
   return { ws, title: "", description: "", teamKey: "", stateId: "", priority: 0, projectId: "", assignToMe: true, sentAt: 0 };
 }
 
-export function readDraft(text) {
-  let d;
+// The drafts, one per workspace ({ <ws>: draft }), so a form typed in one
+// workspace never touches another's. Junk entries are left out.
+export function readDrafts(text) {
+  let m;
   try {
-    d = JSON.parse(text);
+    m = JSON.parse(text);
   } catch {
-    return null;
+    return {};
   }
-  if (!d || typeof d !== "object" || typeof d.ws !== "string" || !d.ws) return null;
-  return { ...emptyDraft(d.ws), ...d };
+  if (!m || typeof m !== "object" || Array.isArray(m)) return {};
+  const out = {};
+  for (const [ws, d] of Object.entries(m)) {
+    if (d && typeof d === "object" && d.ws === ws && ws) out[ws] = { ...emptyDraft(ws), ...d };
+  }
+  return out;
+}
+
+// The drafts with workspace `ws`'s replaced (null: removed).
+export function withDraft(drafts, ws, d) {
+  const out = { ...drafts };
+  if (d) out[ws] = d;
+  else delete out[ws];
+  return out;
 }
 
 // Whether a draft has anything worth keeping: typed text. Emptying both
@@ -100,10 +114,9 @@ export function hasText(d) {
   return Boolean(d && (d.title.trim() || d.description.trim()));
 }
 
-// The draft for the form opening in workspace `ws`: the kept one when it's
-// that workspace's and has text; null otherwise (the form starts empty and
-// a draft for another workspace stays kept for it).
-export function draftFor(d, ws) {
+// The draft for the form opening in workspace `ws`, if it has text.
+export function draftFor(drafts, ws) {
+  const d = drafts?.[ws];
   return d && d.ws === ws && hasText(d) ? d : null;
 }
 
@@ -114,14 +127,16 @@ export function onEnter(d) {
   return d?.sentAt ? "confirm" : "send";
 }
 
-// The draft's fields from the form, keeping what the form doesn't hold.
+// Workspace `ws`'s draft from the form, keeping what the form doesn't hold
+// (its sentAt). Another workspace's draft is never its base.
 export function fromForm(d, ws, form, title, description) {
+  const base = d?.ws === ws ? d : emptyDraft(ws);
   return {
-    ...(d ?? emptyDraft(ws)),
+    ...base,
     ws,
     title,
     description,
-    teamKey: form?.team?.key ?? d?.teamKey ?? "",
+    teamKey: form?.team?.key ?? base.teamKey ?? "",
     stateId: form?.state ?? "",
     priority: form?.priority ?? 0,
     projectId: form?.project ?? "",

@@ -485,3 +485,28 @@ opened from GitHub.
 - **Demo** never reads or writes the spot or the draft. The status menu is
   cleared with the screen on a switch or sign-out. A restored filter
   searches again after the lists load.
+
+## Whole-branch review of the build (Opus, 2026-11-20): what changed
+
+- **Drafts are kept one per workspace** (`localStorage "drafts"`, `{ <ws>:
+  draft }`). Typing in a form in workspace B used to overwrite A's draft
+  and inherit its `sentAt` and team; a form's draft is now built only from
+  its own workspace's.
+- **After a mid-session machine switch** (the machine dropped off, status
+  answered elsewhere) or a workspace signed out under the popup, the first
+  task to notice (a load, a detail, a project's) loads what's shown again.
+  Render no longer starts work.
+- **Adopting a switch another copy made** (the file is already the new
+  machine's) drops what's shown but clears nothing on disk; only the copy
+  that claims the switch clears the files.
+- **The workspace shown is matched by id only**: no other workspace's name
+  or key stands in for it, and a worktree waits until it's known.
+- **The form retries the Projects list** when a create is refused for it.
+- Nits: teams and statuses answers carry `gen` and their request's stamp;
+  a demo toggle drops answers from the other mode and leaves the demo's
+  workspace; a detail is shown from the cache only under a known, matching
+  who; one oversized detail no longer pushes out the rest.
+- Not changed: `seenAt` is not advanced when status confirms the copy's
+  own machine. Doing so would let a copy that never saw another's switch
+  replace it (the flip-back the `base` rule stops); the cost is that this
+  copy's later switch is refused once and heals on its next write.

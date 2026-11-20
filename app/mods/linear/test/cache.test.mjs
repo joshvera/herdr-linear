@@ -317,3 +317,11 @@ test("starting an issue may use any row; a worktree alone, or a project's, needs
   assert.equal(mayWorktree({ start: false, issue: false, live: true }).ok, true);
   assert.deepEqual(mayWorktree({ start: false, issue: false, live: false, absent: true }), { ok: false, why: "It isn't among the open projects any more." });
 });
+
+test("one detail too big to fit doesn't push out the smaller ones", () => {
+  const details = { "w1/issue/huge": { d: { description: "z".repeat(LIMITS.detailBytes) }, saved: NOW } };
+  for (let i = 0; i < 5; i++) details[`w1/issue/s${i}`] = { d: { description: "small" }, saved: NOW - 1000 - i };
+  const out = applyPatch(empty("details"), { who: here, details }, "details", NOW);
+  assert.ok(!("w1/issue/huge" in out.details));
+  assert.equal(Object.keys(out.details).length, 5);
+});

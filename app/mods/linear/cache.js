@@ -182,8 +182,9 @@ function newest(entries, count, bytes) {
   const out = {};
   let size = 0;
   for (const [k, e] of [...entries].sort((a, b) => b[1].saved - a[1].saved).slice(0, count)) {
-    size += utf8Length(JSON.stringify(k)) + utf8Length(JSON.stringify(e)) + 2;
-    if (size > bytes) break;
+    const n = utf8Length(JSON.stringify(k)) + utf8Length(JSON.stringify(e)) + 2;
+    if (size + n > bytes) continue; // too big to fit: the smaller ones after it still may
+    size += n;
     out[k] = e;
   }
   return out;
