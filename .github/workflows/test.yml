@@ -27,6 +27,11 @@ jobs:
         run: sh scripts/build.sh && ./bin/herdr-linear | head -n 1
       - name: install without Go (checksum verified)
         run: sh scripts/test-build.sh
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24
+      - name: the app mod's rules (modules with no imports)
+        run: node --test app/mods/linear/test/*.test.mjs
 
   linux:
     runs-on: ubuntu-latest

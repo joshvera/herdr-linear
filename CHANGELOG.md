@@ -1,5 +1,28 @@
 # Changelog
 
+## 0.14.5 - 2026-11-07
+
+- **The installer finds the Herdr app when it came from the .dmg.**
+  `install.sh --app` looks in `/Applications` and `~/Applications` as well as
+  your `PATH`, so it no longer says the app isn't installed.
+
+## 0.14.4 - 2026-11-06
+
+- **The filter searches Linear.** When your own issues have nothing for what
+  you typed, it looks the number up if it is one, then tries Linear's
+  full-text search. Results are listed under *Not in your issues*. A match in
+  your own issues now stops there, numbers included.
+- **The app's popup no longer sticks on Loading.** Overlapping writes could
+  corrupt `linear-cache.json`, and a corrupt one stopped the popup from
+  loading anything. If you hit this, updating fixes it; the file needn't be
+  removed.
+
+## 0.14.3 - 2026-11-04
+
+- **A worktree is made from the checkout you picked**, exactly: one whose
+  path ends in a space, or has a newline in it, is no longer mistaken for
+  a sibling. Thanks, @EricGrill!
+
 ## 0.14.2 - 2026-11-01
 
 - **Start says what it's doing** in the app: checking the issue in Linear,
