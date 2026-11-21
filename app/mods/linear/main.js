@@ -17,6 +17,7 @@ import { agents, panes, machines, spaces, run, exec, theme, appHome, props, clos
 import { tones, tint, countPill, stateIcon, projectIcon, PRIORITIES, priorityIcon, hue, icon, chip, words, key, MONO } from "./look.js";
 import { Store } from "./store.js";
 import { whoOf, sameWho, seed, stamper, takesOver, isGone, staleMark, mayChangeState, mayCreate, mayWorktree } from "./cache.js";
+import { modKey } from "./modkeys.js";
 import { openedWithProps, snapshot, restore, pickRow, readDrafts, withDraft, hasText, draftFor, onEnter, fromForm } from "./view.js";
 
 // The herdr-linear this mod is part of (its release; the repo's tests hold it
@@ -250,11 +251,13 @@ export default class Linear extends View {
     this.startWaker(cx);
 
     // Key bindings and `herdr-app do`: linear.escape, linear.demo,
-    // linear.next, linear.prev, linear.reload.
+    // linear.next, linear.prev, linear.reload, linear.close (⌘L here) and
+    // linear.github (⌘G here; see modkeys.js).
     cx.spawn(async (cx) => {
       for (;;) {
         const c = await nextCommand();
         if (c === "escape") this.escape(cx);
+        else if (c === "close" || c === "github") this.modKeyPressed(c === "close" ? "linear" : c);
         // Tab (keys.json binds it here, over the app's own): on the new
         // issue's form, from the title to the description and back.
         else if ((c === "tab" || c === "backtab") && this.screen === "create" && !this.projOpen) {
@@ -1058,6 +1061,15 @@ export default class Linear extends View {
   dismiss() {
     this.closing = true;
     closeOverlay(props().overlay);
+  }
+
+  // ⌘L or ⌘G on this view (modkeys.js): its own key closes it, GitHub's
+  // goes back to the PR it came from, if it came from one.
+  modKeyPressed(pressed) {
+    const k = modKey("linear", pressed, this.backTo);
+    if (k.close) this.dismiss();
+    if (k.open) openOverlay({ mod: k.open.mod, kind: "dialog", width: 0.8, height: 0.8, props: k.open.props ?? {} });
+    if (k.toggle) run("mod.open", { name: k.toggle });
   }
 
   open(url, cx) {

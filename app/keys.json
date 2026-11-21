@@ -5,6 +5,8 @@
   "mod:linear": {
     "escape": "linear.escape",
     "tab": "linear.tab",
-    "shift-tab": "linear.backtab"
+    "shift-tab": "linear.backtab",
+    "cmd-l": "linear.close",
+    "cmd-g": "linear.github"
   }
 }
